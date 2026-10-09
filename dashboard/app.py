@@ -108,7 +108,7 @@ st.title("Personal Expense Classifier")
 
 if os.getenv("EXPENSE_DEMO_MODE", "1") == "1":
     st.info(
-        "Demo mode: saved categories last only for this browser session. "
+        "Demo mode: saved categories last only for this browser session.    "
         "Download your results before refreshing or closing the session."
     )
 else:
