@@ -6,6 +6,13 @@ and explore spending from confirmed transactions.
 
 Built with Python, pandas, scikit-learn and Streamlit.
 
+## Live demo
+
+https://personal-expense-classifier.streamlit.app/
+
+The public demo stores corrections only within the current browser session.
+Refresh clears them. Download reviewed results before leaving.
+
 ## Features
 
 - Single-transaction category suggestions with the top three model scores.
