@@ -424,7 +424,7 @@ if uploaded_file is not None:
 
                     saved_category = corrections.get(description_key)
 
-                    if saved_category in model_categories:
+                    if saved_category in category_options:
                         review_df.at[
                             row_index, "confirmed_category"
                         ] = saved_category
@@ -510,8 +510,8 @@ if uploaded_file is not None:
                     bool(row["reviewed"])
                     and row["direction"] == "Debit"
                     and row["validation_issue"] == ""
-                    and description_key
-                    and category in model_categories
+                    and bool(description_key)
+                    and category in category_options
                 )
 
                 if eligible:
