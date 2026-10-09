@@ -41,7 +41,7 @@ def load_model(path):
 
 def load_corrections():
     # Public demo: each visitor gets separate session storage.
-    if os.getenv("EXPENSE_DEMO_MODE", "0") == "1":
+    if os.getenv("EXPENSE_DEMO_MODE", "1") == "1":
         if "category_corrections" not in st.session_state:
             st.session_state.category_corrections = {}
 
@@ -62,7 +62,7 @@ def load_corrections():
 
 
 def save_corrections(corrections):
-    if os.getenv("EXPENSE_DEMO_MODE", "0") == "1":
+    if os.getenv("EXPENSE_DEMO_MODE", "1") == "1":
         st.session_state.category_corrections = corrections.copy()
         return
 
@@ -106,7 +106,7 @@ if "csv_generation" not in st.session_state:
 # 5. Introduction.
 st.title("Personal Expense Classifier")
 
-if os.getenv("EXPENSE_DEMO_MODE", "0") == "1":
+if os.getenv("EXPENSE_DEMO_MODE", "1") == "1":
     st.info(
         "Demo mode: saved categories last only for this browser session. "
         "Download your results before refreshing or closing the session."
