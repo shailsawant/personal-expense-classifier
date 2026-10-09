@@ -7,6 +7,7 @@ import sys
 import joblib
 import pandas as pd
 import streamlit as st
+import os
 
 
 # 1. Configure the page and locate project files.
@@ -38,8 +39,15 @@ def clean_description(description):
 def load_model(path):
     return joblib.load(path)
 
-
 def load_corrections():
+    # Public demo: each visitor gets separate session storage.
+    if os.getenv("EXPENSE_DEMO_MODE", "0") == "1":
+        if "category_corrections" not in st.session_state:
+            st.session_state.category_corrections = {}
+
+        return st.session_state.category_corrections.copy()
+
+    # Local app: keep corrections on disk.
     if not corrections_path.exists():
         return {}
 
@@ -54,6 +62,10 @@ def load_corrections():
 
 
 def save_corrections(corrections):
+    if os.getenv("EXPENSE_DEMO_MODE", "0") == "1":
+        st.session_state.category_corrections = corrections.copy()
+        return
+
     temporary_path = corrections_path.with_suffix(".tmp")
 
     temporary_path.write_text(
@@ -62,7 +74,6 @@ def save_corrections(corrections):
     )
 
     temporary_path.replace(corrections_path)
-
 
 # 3. Load the model and saved corrections.
 if not model_path.exists():
@@ -94,6 +105,14 @@ if "csv_generation" not in st.session_state:
 
 # 5. Introduction.
 st.title("Personal Expense Classifier")
+
+if os.getenv("EXPENSE_DEMO_MODE", "0") == "1":
+    st.info(
+        "Demo mode: saved categories last only for this browser session. "
+        "Download your results before refreshing or closing the session."
+    )
+else:
+    st.caption("Local mode: saved categories are stored on this computer.")
 
 st.write(
     "Review suggested expense categories and save your corrections."

@@ -222,3 +222,8 @@ __marimo__/
 data/
 models/
 .venv/
+
+# Include only the trained demo model.
+!models/
+models/*
+!models/expense_classifier.joblib
