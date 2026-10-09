@@ -557,3 +557,73 @@ if uploaded_file is not None:
             "Only reviewed, valid debit categories are remembered "
             "when you click Save reviewed categories."
         )
+
+        # 10. Show spending for reviewed, valid debit expenses.
+if uploaded_file is not None:
+    if st.session_state.get("csv_upload_key") == upload_key:
+        st.divider()
+        st.subheader("Reviewed spending")
+
+        expense_mask = (
+            edited_df["reviewed"].fillna(False).astype(bool)
+            & edited_df["direction"].eq("Debit")
+            & edited_df["validation_issue"].eq("")
+            & edited_df["confirmed_category"].isin(model_categories)
+        )
+
+        expenses = edited_df.loc[expense_mask].copy()
+
+        st.caption(
+            "Includes only reviewed, valid debit rows assigned an expense "
+            "category. Amounts use the uploaded file's currency; upload "
+            "one currency at a time. Refunds are not deducted."
+        )
+
+        if expenses.empty:
+            st.info(
+                "Review at least one valid debit expense to see spending."
+            )
+        else:
+            # Round each transaction to two decimal places and sum
+            # integer minor units to avoid floating-point total errors.
+            expenses["amount_minor"] = (
+                expenses["amount"].round(2).mul(100).round().astype("int64")
+            )
+
+            total_spending = expenses["amount_minor"].sum() / 100
+
+            st.metric(
+                "Reviewed expense total",
+                f"{total_spending:,.2f}"
+            )
+
+            st.write(f"Included transactions: {len(expenses)}")
+
+            category_totals = (
+                expenses.groupby("confirmed_category")["amount_minor"]
+                .sum()
+                .div(100)
+                .sort_values(ascending=False)
+                .rename("Amount")
+            )
+
+            st.write("Spending by category")
+            st.dataframe(category_totals.to_frame())
+            st.bar_chart(category_totals)
+
+            expenses["month"] = pd.to_datetime(
+                expenses["date"],
+                format="%Y-%m-%d"
+            ).dt.strftime("%Y-%m")
+
+            monthly_totals = (
+                expenses.groupby("month")["amount_minor"]
+                .sum()
+                .div(100)
+                .sort_index()
+                .rename("Amount")
+            )
+
+            st.write("Spending by month")
+            st.dataframe(monthly_totals.to_frame())
+            st.bar_chart(monthly_totals)
