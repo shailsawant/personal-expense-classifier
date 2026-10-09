@@ -2,25 +2,31 @@ from pathlib import Path
 from io import BytesIO
 import hashlib
 import json
+import sys
 
 import joblib
 import pandas as pd
 import streamlit as st
 
 
-# 1. Page settings and file paths.
+# 1. Configure the page and locate project files.
 st.set_page_config(
     page_title="Personal Expense Classifier",
     page_icon="💳"
 )
 
 project_folder = Path(__file__).resolve().parent.parent
+
+sys.path.insert(0, str(project_folder))
+from src.transaction_utils import prepare_transactions
+
 model_path = project_folder / "models" / "expense_classifier.joblib"
 corrections_path = project_folder / "data" / "category_corrections.json"
 
 corrections_path.parent.mkdir(exist_ok=True)
 
 REVIEW_CATEGORY = "Needs review / Outside model scope"
+INCOMING_CATEGORY = "Incoming money"
 
 
 # 2. Helper functions.
@@ -90,8 +96,7 @@ if "csv_generation" not in st.session_state:
 st.title("Personal Expense Classifier")
 
 st.write(
-    "Review suggested categories for outgoing expenses "
-    "and save your corrections."
+    "Review suggested expense categories and save your corrections."
 )
 
 st.caption(
@@ -101,12 +106,12 @@ st.caption(
 )
 
 st.caption(
-    "Saved categories are reused for matching descriptions. "
+    "Saved categories are reused for matching debit descriptions. "
     "They do not retrain the model. This version is for local, single-user use."
 )
 
 
-# 6. Single-description prediction.
+# 6. Predict one outgoing expense.
 st.subheader("Enter one expense")
 
 with st.form("prediction_form"):
@@ -122,16 +127,16 @@ if submitted:
         st.session_state.prediction = None
         st.warning("Enter a transaction description.")
     else:
-        cleaned_description = clean_description(description)
+        description_key = clean_description(description)
 
-        probabilities = model.predict_proba([cleaned_description])[0]
+        probabilities = model.predict_proba([description_key])[0]
 
         suggestions = pd.DataFrame({
             "Category": model.classes_,
             "Model score": probabilities
         }).sort_values("Model score", ascending=False)
 
-        saved_category = corrections.get(cleaned_description)
+        saved_category = corrections.get(description_key)
 
         if saved_category not in model_categories:
             saved_category = None
@@ -144,7 +149,7 @@ if submitted:
 
         st.session_state.prediction = {
             "description": description.strip(),
-            "description_key": cleaned_description,
+            "description_key": description_key,
             "suggestions": suggestions.head(3).copy(),
             "saved_category": saved_category
         }
@@ -175,8 +180,8 @@ if prediction is not None:
     )
 
     st.caption(
-        "These are model suggestions. Scores are not verified "
-        "probabilities of correctness."
+        "Model scores are not verified probabilities of correctness. "
+        "Confirm or change the category."
     )
 
     selected_category = st.selectbox(
@@ -188,10 +193,10 @@ if prediction is not None:
     if st.button("Save confirmation", key="save_single"):
         save_succeeded = True
 
-        # Remember supported categories for future matching descriptions.
         if selected_category in model_categories:
             try:
                 updated_corrections = load_corrections()
+
                 updated_corrections[
                     prediction["description_key"]
                 ] = selected_category
@@ -214,7 +219,7 @@ if prediction is not None:
             st.rerun()
 
 
-# 7. Display confirmations from this session.
+# 7. Display and download session confirmations.
 st.subheader("Session confirmations")
 
 if st.session_state.confirmed_transactions:
@@ -244,13 +249,13 @@ st.caption(
 )
 
 
-# 8. CSV upload.
+# 8. Upload transactions with dates, debits and credits.
 st.divider()
-st.subheader("Upload expense descriptions")
+st.subheader("Upload transactions")
 
 st.caption(
-    "For this version, upload outgoing expenses only. "
-    "Date, amount and debit/credit mapping will be added separately."
+    "Use separate debit and credit columns with plain numeric amounts. "
+    "Incoming money is kept separate from expense predictions."
 )
 
 uploaded_file = st.file_uploader(
@@ -276,6 +281,12 @@ if uploaded_file is not None:
         st.warning("The CSV contains no transactions.")
         st.stop()
 
+    if len(uploaded_df.columns) < 4:
+        st.warning(
+            "This upload needs description, date, debit and credit columns."
+        )
+        st.stop()
+
     st.write("Preview")
 
     st.dataframe(
@@ -284,87 +295,163 @@ if uploaded_file is not None:
         use_container_width=True
     )
 
+    column_names = uploaded_df.columns.tolist()
+
     description_column = st.selectbox(
-        "Which column contains transaction descriptions?",
-        uploaded_df.columns.tolist()
+        "Description column",
+        column_names,
+        index=0
     )
 
-    upload_key = f"{file_id}:{description_column}"
+    date_column = st.selectbox(
+        "Date column",
+        column_names,
+        index=1
+    )
 
-    if st.button("Suggest categories for CSV"):
-        descriptions = (
-            uploaded_df[description_column]
-            .astype("string")
-            .fillna("")
-            .str.strip()
-            .str.upper()
-            .str.replace(r"\s+", " ", regex=True)
-        )
+    debit_column = st.selectbox(
+        "Debit column",
+        column_names,
+        index=2
+    )
 
-        valid_description = descriptions.ne("")
+    credit_column = st.selectbox(
+        "Credit column",
+        column_names,
+        index=3
+    )
 
-        review_df = pd.DataFrame({
-            "row_number": range(1, len(uploaded_df) + 1),
-            "description": (
-                uploaded_df[description_column]
-                .astype("string")
-                .fillna("")
-            ),
-            "suggested_category": REVIEW_CATEGORY,
-            "model_score": 0.0,
-            "confirmed_category": REVIEW_CATEGORY,
-            "category_source": "Missing description",
-            "reviewed": False
-        })
+    date_format = st.selectbox(
+        "Date format",
+        ["%d/%m/%Y", "%Y-%m-%d", "%m/%d/%Y"],
+        help="Day/month/year, year-month-day, or month/day/year."
+    )
 
-        if valid_description.any():
-            probabilities = model.predict_proba(
-                descriptions.loc[valid_description]
+    selected_columns = [
+        description_column,
+        date_column,
+        debit_column,
+        credit_column
+    ]
+
+    upload_key = json.dumps([
+        file_id,
+        selected_columns,
+        date_format
+    ])
+
+    if st.button("Validate and suggest categories"):
+        if len(set(selected_columns)) != 4:
+            st.error("Select four different columns.")
+        else:
+            prepared = prepare_transactions(
+                uploaded_df,
+                description_column,
+                date_column,
+                debit_column,
+                credit_column,
+                date_format
             )
 
-            predictions = model.classes_[probabilities.argmax(axis=1)]
-            scores = probabilities.max(axis=1)
+            review_df = pd.DataFrame({
+                "row_number": range(1, len(prepared) + 1),
+                "date": prepared["date_clean"].dt.strftime("%Y-%m-%d"),
+                "description": (
+                    uploaded_df[description_column]
+                    .astype("string")
+                    .fillna("")
+                ),
+                "direction": prepared["direction"],
+                "amount": prepared["amount"],
+                "validation_issue": prepared["validation_issue"],
+                "suggested_category": REVIEW_CATEGORY,
+                "model_score": 0.0,
+                "confirmed_category": REVIEW_CATEGORY,
+                "category_source": "Needs review",
+                "reviewed": False
+            })
+
+            # Credits are incoming money, not expense predictions.
+            valid_credit = (
+                prepared["valid_transaction"]
+                & prepared["direction"].eq("Credit")
+            )
 
             review_df.loc[
-                valid_description, "suggested_category"
-            ] = predictions
+                valid_credit, "suggested_category"
+            ] = INCOMING_CATEGORY
 
             review_df.loc[
-                valid_description, "model_score"
-            ] = scores
+                valid_credit, "confirmed_category"
+            ] = INCOMING_CATEGORY
 
             review_df.loc[
-                valid_description, "confirmed_category"
-            ] = predictions
+                valid_credit, "category_source"
+            ] = "Credit direction"
 
-            review_df.loc[
-                valid_description, "category_source"
-            ] = "Model suggestion"
+            # Predict only valid debit transactions.
+            valid_debit = (
+                prepared["valid_transaction"]
+                & prepared["direction"].eq("Debit")
+            )
 
-        # Reuse saved categories without changing the model suggestion.
-        for row_index in review_df.index:
-            description_key = descriptions.iloc[row_index]
-            saved_category = corrections.get(description_key)
+            if valid_debit.any():
+                probabilities = model.predict_proba(
+                    prepared.loc[valid_debit, "description_clean"]
+                )
 
-            if description_key and saved_category in model_categories:
-                review_df.at[
-                    row_index, "confirmed_category"
-                ] = saved_category
+                review_df.loc[
+                    valid_debit, "suggested_category"
+                ] = model.classes_[probabilities.argmax(axis=1)]
 
-                review_df.at[
-                    row_index, "category_source"
-                ] = "Saved confirmation"
+                review_df.loc[
+                    valid_debit, "model_score"
+                ] = probabilities.max(axis=1)
 
-        st.session_state.csv_review = review_df
-        st.session_state.csv_upload_key = upload_key
+                review_df.loc[
+                    valid_debit, "confirmed_category"
+                ] = review_df.loc[valid_debit, "suggested_category"]
 
-        # Reset the editor when predictions are generated again.
-        st.session_state.csv_generation += 1
+                review_df.loc[
+                    valid_debit, "category_source"
+                ] = "Model suggestion"
 
+                # Reuse saved corrections for valid debits.
+                for row_index in prepared.index[valid_debit]:
+                    description_key = prepared.at[
+                        row_index, "description_clean"
+                    ]
+
+                    saved_category = corrections.get(description_key)
+
+                    if saved_category in model_categories:
+                        review_df.at[
+                            row_index, "confirmed_category"
+                        ] = saved_category
+
+                        review_df.at[
+                            row_index, "category_source"
+                        ] = "Saved confirmation"
+
+            st.session_state.csv_review = review_df
+            st.session_state.csv_upload_key = upload_key
+            st.session_state.csv_generation += 1
+
+    # 9. Review, save corrections and export.
     if st.session_state.get("csv_upload_key") == upload_key:
-        st.write(
-            "Correct categories, then tick Reviewed for each row "
-            "you have checked."
+        review_df = st.session_state.csv_review
+
+        invalid_count = int(
+            review_df["validation_issue"].ne("").sum()
+        )
+
+        st.write(f"Transactions needing data fixes: {invalid_count}")
+
+        st.caption(
+            "Incoming money may be salary, a refund or a transfer. "
+            "Debits may also be transfers or savings; choose "
+            "Needs review / Outside model scope where appropriate. "
+            "Fix invalid source rows and upload again."
         )
 
         editor_key = (
@@ -373,12 +460,16 @@ if uploaded_file is not None:
         )
 
         edited_df = st.data_editor(
-            st.session_state.csv_review,
+            review_df,
             hide_index=True,
             use_container_width=True,
             disabled=[
                 "row_number",
+                "date",
                 "description",
+                "direction",
+                "amount",
+                "validation_issue",
                 "suggested_category",
                 "model_score",
                 "category_source"
@@ -386,7 +477,7 @@ if uploaded_file is not None:
             column_config={
                 "confirmed_category": st.column_config.SelectboxColumn(
                     "Confirmed category",
-                    options=category_options,
+                    options=category_options + [INCOMING_CATEGORY],
                     required=True
                 ),
                 "model_score": st.column_config.NumberColumn(
@@ -403,33 +494,37 @@ if uploaded_file is not None:
         st.caption(
             f"Reviewed: {int(edited_df['reviewed'].sum())} "
             f"of {len(edited_df)} transactions. "
-            "Check saved categories too: the same description "
+            "Check saved categories too: matching descriptions "
             "can represent different purchases."
         )
 
         if st.button("Save reviewed categories for future uploads"):
             updates = {}
-            conflicting_descriptions = set()
+            conflicts = set()
 
             for _, row in edited_df.iterrows():
                 description_key = clean_description(row["description"])
                 category = row["confirmed_category"]
 
-                if (
+                eligible = (
                     bool(row["reviewed"])
+                    and row["direction"] == "Debit"
+                    and row["validation_issue"] == ""
                     and description_key
                     and category in model_categories
-                ):
+                )
+
+                if eligible:
                     if (
                         description_key in updates
                         and updates[description_key] != category
                     ):
-                        conflicting_descriptions.add(description_key)
+                        conflicts.add(description_key)
 
                     updates[description_key] = category
 
-            # Avoid remembering ambiguous descriptions.
-            for description_key in conflicting_descriptions:
+            # Do not save contradictory matches from this upload.
+            for description_key in conflicts:
                 updates.pop(description_key, None)
 
             try:
@@ -441,24 +536,24 @@ if uploaded_file is not None:
                     f"Saved {len(updates)} description/category matches."
                 )
 
-                if conflicting_descriptions:
+                if conflicts:
                     st.warning(
-                        "Some descriptions had different reviewed categories "
-                        "in this upload. Their saved matches were not updated."
+                        "Conflicting categories for the same description "
+                        "were not saved. Existing matches were unchanged."
                     )
             except (OSError, ValueError) as error:
-                st.error(f"Could not save reviewed categories: {error}")
+                st.error(f"Could not save categories: {error}")
 
         st.download_button(
             "Download categorised CSV",
             data=edited_df.to_csv(index=False).encode("utf-8"),
-            file_name="categorised_expenses.csv",
+            file_name="categorised_transactions.csv",
             mime="text/csv",
             key="download_csv"
         )
 
         st.caption(
-            "Download keeps all rows, including unreviewed suggestions. "
-            "Only reviewed, supported categories are remembered when "
-            "you click Save reviewed categories."
+            "The download includes all rows and their review status. "
+            "Only reviewed, valid debit categories are remembered "
+            "when you click Save reviewed categories."
         )
